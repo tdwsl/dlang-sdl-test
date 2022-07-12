@@ -4,8 +4,10 @@ import sdlutil;
 
 import bindbc.sdl;
 import core.stdc.stdio;
+import core.stdc.stdlib;
 import core.stdc.string;
 import std.format;
+import std.stdio;
 
 SDL_Texture* t_feet, t_eyes, t_bodies, t_tileset, t_editor, t_font;
 
@@ -14,6 +16,58 @@ bool g_quit = false;
 int g_mapw, g_maph;
 byte[] g_map;
 int[2][] g_markers;
+
+const Uint8[] g_controls = [
+    SDL_SCANCODE_UP,
+    SDL_SCANCODE_DOWN,
+    SDL_SCANCODE_LEFT,
+    SDL_SCANCODE_RIGHT,
+    SDL_SCANCODE_Z,
+    SDL_SCANCODE_X,
+];
+
+bool mapSafe(int x, int y);
+
+class Actor {
+private:
+    long xv=0, yv=0;
+    int d=0;
+    byte body, eyes, feet;
+public:
+    float x, y;
+
+    void init(float x, float y) {
+        this.x = x;
+        this.y = y;
+    }
+
+    void draw(long xo, long yo) {
+        long dx = cast(long)(x*16-8+xo), dy = cast(long)(y*16-8+yo);
+        int w, h;
+        SDL_GetWindowSize(g_window, &w, &h);
+        w /= g_scale;
+        h /= g_scale;
+        if(dx < 8*g_scale || dy < 8*g_scale || dx >= w+8*g_scale || dy >= h+8*g_scale)
+            return;
+        drawTexture(t_bodies, d*16, body*16, 16, 16, cast(int)(x*16-8+xo), cast(int)(y*16-8+yo));
+    }
+
+    void control() {
+        xv = 0; yv = 0;
+        if(g_keyboard[g_controls[0]]) yv = -1;
+        if(g_keyboard[g_controls[1]]) yv = 1;
+        if(g_keyboard[g_controls[2]]) xv = -1;
+        if(g_keyboard[g_controls[3]]) xv = 1;
+    }
+
+    void update(float m) {
+        float dx = x+xv*m, dy = y+yv*m;
+        if(mapSafe(cast(int)dx, cast(int)dy)) {
+            x = dx;
+            y = dy;
+        }
+    }
+}
 
 void loadMap(const(char)* filename) {
     FILE* fp = fopen(filename, "r");
@@ -53,9 +107,17 @@ void saveMap(const(char)* filename) {
     fclose(fp);
 }
 
-void drawMap(int xo, int yo) {
+bool mapSafe(int x, int y) {
+    if(x < 0 || y < 0 || x >= g_mapw || y >= g_maph)
+        return false;
+    if(g_map[y*g_mapw+x] >= 8)
+        return false;
+    return true;
+}
+
+void drawMap(long xo, long yo) {
     for(int i = 0; i < g_mapw*g_maph; i++)
-        drawTexture(t_tileset, (g_map[i]%8)*16, (g_map[i]/8)*16, 16, 16, (i%g_mapw)*16+xo, (i/g_mapw)*16+yo);
+        drawTexture(t_tileset, (g_map[i]%8)*16, (g_map[i]/8)*16, 16, 16, cast(int)((i%g_mapw)*16+xo), cast(int)((i/g_mapw)*16+yo));
 }
 
 void drawText(char[] text, int x, int y) {
@@ -167,14 +229,14 @@ void editor(char[] filename) {
         int w, h;
         SDL_GetWindowSize(g_window, &w, &h);
         w /= g_scale; h /= g_scale;
-        int xo = w/2-cx*16-8, yo = h/2-cy*16-8;
+        long xo = w/2-cx*16-8, yo = h/2-cy*16-8;
         drawMap(xo, yo);
 
         char[100] buf;
 
         for(int i = 0; i < g_markers.length; i++) {
-            drawText("M".dup, g_markers[i][0]*16+xo, g_markers[i][1]*16+yo);
-            drawText(sformat(buf, "%d", i), g_markers[i][0]*16+xo, g_markers[i][1]*16+yo+8);
+            drawText("M".dup, cast(int)(g_markers[i][0]*16+xo), cast(int)(g_markers[i][1]*16+yo));
+            drawText(sformat(buf, "%d", i), cast(int)(g_markers[i][0]*16+xo), cast(int)(g_markers[i][1]*16+yo+8));
         }
 
         drawText(sformat(buf, "\"%s\"", filename), 0, 0);
@@ -196,7 +258,51 @@ void editor(char[] filename) {
     }
 }
 
-void main() {
+void runGame(char[] filename) {
+    loadMap(cast(const(char)*)filename.ptr);
+
+    Actor player;
+    player.init(g_markers[0][0], g_markers[0][1]);
+
+    bool quit = false;
+    int lastUpdate = SDL_GetTicks();
+
+    while(!quit) {
+        SDL_Event ev;
+        while(SDL_PollEvent(&ev))
+            switch(ev.type) {
+            default: break;
+            case SDL_QUIT:
+                quit = true;
+                g_quit = true;
+                break;
+            }
+
+        player.control();
+
+        /* update */
+        int currentTime = SDL_GetTicks();
+        int diff = currentTime-lastUpdate;
+        currentTime = lastUpdate;
+        float m = diff*0.01;
+        player.update(diff);
+
+        /* draw */
+        SDL_RenderClear(g_renderer);
+
+        int w, h;
+        SDL_GetWindowSize(g_window, &w, &h);
+        w /= g_scale; h /= g_scale;
+        long xo = cast(long)(player.x-w/2), yo = cast(long)(player.y-h/2);
+
+        drawMap(xo, yo);
+        player.draw(xo, yo);
+
+        SDL_RenderPresent(g_renderer);
+    }
+}
+
+void main(string[] args) {
     initSDL();
     t_feet = loadTexture("data/img/feet.bmp");
     t_eyes = loadTexture("data/img/eyes.bmp");
@@ -205,6 +311,20 @@ void main() {
     t_editor = loadTexture("data/img/editor.bmp");
     t_font = loadTexture("data/img/font.bmp");
 
+    /*if(args.length > 1) {
+        if(args[1] == "-e" || args[1] == "--editor") {
+            if(args.length > 3)
+                editor(args[3].dup);
+            else
+                editor("map.txt".dup);
+        }
+        else {
+            writefln("usage: %s [--editor / --e <filename>]", args[0]);
+        }
+    }
+    else {
+        runGame("map.txt".dup);
+    }*/
     editor("map.txt".dup);
 
     endSDL();
