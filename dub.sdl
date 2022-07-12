@@ -1,0 +1,7 @@
+name "city-deathmatch-2"
+description "a versus game set in a bustling city"
+authors "tdwsl"
+copyright "Copyright © 2022, tdwsl"
+license "MIT"
+
+dependency "bindbc-sdl" version="~>1.2.0"
